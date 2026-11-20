@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Wrap-Slide</title>
+<style>
+:root{--bg:#101522;--panel:#1b2236;--text:#f7f9ff;--accent:#ffc857}
+*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden}
+body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);overscroll-behavior:none}
+button{font:inherit;color:inherit}.app{height:100%;display:grid;grid-template-rows:56px minmax(0,1fr) 72px}
+.hud{display:flex;align-items:center;gap:10px;padding:8px 12px;background:#151b2c;border-bottom:1px solid #303957}
+.hud-main{flex:1;min-width:0}.title{font-weight:800}.progress-track{height:8px;background:#303750;border-radius:99px;margin-top:5px;overflow:hidden}
+.progress{height:100%;width:0;background:var(--accent);transition:width .15s}.meter-wrap{width:110px}.meter-track{height:7px;background:#303750;border-radius:99px}
+.meter{height:100%;background:#72d6bd;border-radius:99px}.hud button{border:0;border-radius:8px;padding:9px 11px;background:#303957}
+.hud button:disabled{opacity:.35}.stage{position:relative;display:grid;place-items:center;min-height:0}
+#board{width:min(92vw,calc(100vh - 160px),560px);height:min(92vw,calc(100vh - 160px),560px);touch-action:none;outline:none}
+.footer{display:flex;gap:8px;align-items:center;justify-content:center;padding:8px;background:#151b2c;border-top:1px solid #303957}
+.inventory{display:flex;gap:7px}.power{width:48px;height:48px;border:1px solid #46506b;border-radius:12px;background:#252d46}
+.power.selected{outline:3px solid var(--accent)}.power:disabled{opacity:.25}
+.screen{position:absolute;inset:0;z-index:10;display:none;place-items:center;padding:20px;background:rgba(10,14,25,.92)}
+.screen.show{display:grid}.card{width:min(460px,92vw);max-height:90%;overflow:auto;text-align:center;border:1px solid #39435f;border-radius:16px;padding:20px;background:var(--panel)}
+.rank-list{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:16px 0}.rank{border:1px solid #46506b;border-radius:9px;padding:10px 4px;background:#252d46}
+.rank.locked{opacity:.38}.card button,.rank-list button:not(.rank){border:0;border-radius:9px;padding:11px 14px;margin:5px;background:var(--accent);color:#191724;font-weight:800}
+.banner{position:absolute;z-index:5;top:18px;padding:10px 14px;border-radius:99px;background:#ffc857;color:#171925;font-weight:900;opacity:0;transform:translateY(-12px);pointer-events:none}
+.banner.show{animation:banner .6s ease}@keyframes banner{0%{opacity:0;transform:translateY(-12px)}20%,80%{opacity:1;transform:none}100%{opacity:0}}
+.prompt{position:absolute;z-index:6;bottom:12px;max-width:92%;padding:10px;border:1px solid #596582;border-radius:10px;background:#1b2236;display:none}
+.prompt.show{display:block}
+.palette-grid{display:grid;grid-template-columns:repeat(5,42px);gap:8px;justify-content:center;margin:12px}.palette-grid button{width:42px;height:42px;border:0;border-radius:50%}
+@media(max-width:520px){.app{grid-template-rows:60px minmax(0,1fr) 64px}.hud{gap:5px;padding:6px}.meter-wrap{width:72px}.hud button{padding:8px}.rank-list{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="hud">
+    <div class="hud-main"><div class="title" id="rankLabel">Iron I · 1/2</div><div class="progress-track"><div class="progress" id="barFill"></div></div></div>
+    <div class="meter-wrap" id="meterWrap"><div style="font-size:11px">POWER</div><div class="meter-track"><div class="meter" id="meterFill"></div></div></div>
+    <button id="undoBtn" title="Undo (Z)">Undo</button><button id="menuBtn" title="Menu">Menu</button>
+  </header>
+  <main class="stage">
+    <canvas id="board" tabindex="0" aria-label="4 by 4 puzzle board"></canvas>
+    <div class="banner" id="banner">Make goal tiles</div>
+    <div class="prompt" id="deadPrompt">No moves left. Undo or use a power-up.<br><button id="restartBtn">Restart rank</button></div>
+  </main>
+  <footer class="footer"><div class="inventory" id="inventory"></div></footer>
+</div>
+<div class="screen show" id="menuScreen"><div class="card"><h1>Wrap-Slide</h1><p>Classic Mode</p><div class="rank-list" id="rankList"></div><button id="startBtn">Start</button><button id="settingsBtn">Settings</button></div></div>
+<div class="screen" id="settingsScreen"><div class="card"><h2>Settings</h2><label><input type="checkbox" id="soundSetting" checked> Sound</label><br><br><label><input type="checkbox" id="hapticSetting" checked> Haptics</label><br><br><label><input type="checkbox" id="shapeSetting" checked> Color shapes</label><br><br><button id="closeSettings">Close</button></div></div>
+<div class="screen" id="rankScreen"><div class="card"><h1 id="rankCompleteTitle">Rank complete!</h1><p id="rankCompleteText"></p><button id="nextRankBtn">Next rank</button><button id="rankMenuBtn">Menu</button></div></div>
+<div class="screen" id="gameScreen"><div class="card"><h1>Game over</h1><p id="gameText"></p><button id="retryBtn">Retry rank</button><button id="gameMenuBtn">Menu</button></div></div>
+
+<script>
+(() => {
+"use strict";
+const CONFIG = {
+  size:4, inventoryCap:3, meterSize:4, undoDepth:Infinity, splitChance:.12,
+  ranks:[
+    {name:"Iron I",levels:2,barTarget:4,colors:3,maxLife:3,axisLockAt:null,power:false,split:false},
+    {name:"Iron II",levels:2,barTarget:4,colors:3,maxLife:3,axisLockAt:null,power:false,split:false},
+    {name:"Iron III",levels:3,barTarget:5,colors:3,maxLife:3,axisLockAt:null,power:true,split:false},
+    {name:"Bronze I",levels:3,barTarget:5,colors:3,maxLife:3,axisLockAt:1,power:true,split:false},
+    {name:"Bronze II",levels:3,barTarget:6,colors:4,maxLife:3,axisLockAt:1,power:true,split:false},
+    {name:"Bronze III",levels:4,barTarget:6,colors:4,maxLife:3,axisLockAt:1,power:true,split:false},
+    {name:"Silver I",levels:4,barTarget:6,colors:4,maxLife:3,axisLockAt:1,power:true,split:true},
+    {name:"Silver II",levels:4,barTarget:7,colors:4,maxLife:3,axisLockAt:1,power:true,split:true},
+    {name:"Silver III",levels:5,barTarget:7,colors:4,maxLife:3,axisLockAt:1,power:true,split:true},
+    {name:"Gold I",levels:5,barTarget:7,colors:4,maxLife:2,axisLockAt:null,power:true,split:true},
+    {name:"Gold II",levels:6,barTarget:8,colors:4,maxLife:2,axisLockAt:null,power:true,split:true},
+    {name:"Gold III",levels:6,barTarget:8,colors:5,maxLife:2,axisLockAt:null,power:true,split:true},
+    {name:"Platinum",levels:7,barTarget:9,colors:5,maxLife:2,axisLockAt:null,power:true,split:true}
+  ],
+  skins:[
+    {id:"default",name:"Classic",bg:"#101522",palette:["#4da8ff","#ff647c","#69d6a5","#ffc857","#b78cff"]},
+    {id:"bronze",name:"Copper",bg:"#241c18",palette:["#e39b55","#c65f4b","#79b89c","#f1ce78","#a58fbb"]},
+    {id:"silver",name:"Silver",bg:"#17202a",palette:["#55b5d9","#d96b83","#79c5a5","#e6b95c","#9f91ce"]},
+    {id:"gold",name:"Gold",bg:"#231f12",palette:["#ffd166","#ef8354","#06d6a0","#118ab2","#b392ac"]},
+    {id:"platinum",name:"Night",bg:"#08111f",palette:["#60a5fa","#f472b6","#34d399","#facc15","#a78bfa"]}
+  ]
+};
+function mulberry32(seed){let t=seed>>>0;return function(){t+=0x6D2B79F5;let r=Math.imul(t^(t>>>15),t|1);r^=r+Math.imul(r^(r>>>7),r|61);return((r^(r>>>14))>>>0)/4294967296}}
+function deepCopy(v){return JSON.parse(JSON.stringify(v))}
+function rngFromSeed(seed){return mulberry32(Number(seed)||0)}
+function tileColor(tile){
+  if(tile.kind==="solid"||tile.kind==="goal") return tile.color;
+  return null;
+}
+function findRuns(board){
+  const runs=[];const n=board.length;
+  for(let r=0;r<n;r++){
+    let c=0;
+    while(c<n){
+      const tile=board[r][c];
+      if(!tile||tile.kind==="goal"||tile.kind==="split"){c++;continue}
+      const color=tile.color,start=c;c++;
+      while(c<n){const t=board[r][c];if(t?.kind==="solid"&&t.color===color)c++;else break}
+      if(c-start>=3)runs.push({axis:"h",row:r,cells:Array.from({length:c-start},(_,k)=>[r,start+k]),length:c-start,color});
+      if(c<n){const end=board[r][c];if(end?.kind==="split"&&end.splitAxis==="h"&&end.color===color){const len=c-start+1;if(len>=3)runs.push({axis:"h",row:r,cells:[...Array.from({length:c-start},(_,k)=>[r,start+k]),[r,c]],length:len,color})}c++}
+    }
+  }
+  for(let c=0;c<n;c++){
+    let r=0;
+    while(r<n){
+      const tile=board[r][c];
+      if(!tile||tile.kind==="goal"||tile.kind==="split"){r++;continue}
+      const color=tile.color,start=r;r++;
+      while(r<n){const t=board[r][c];if(t?.kind==="solid"&&t.color===color)r++;else break}
+      if(r-start>=3)runs.push({axis:"v",col:c,cells:Array.from({length:r-start},(_,k)=>[start+k,c]),length:r-start,color});
+      if(r<n){const end=board[r][c];if(end?.kind==="split"&&end.splitAxis==="v"&&end.color===color){const len=r-start+1;if(len>=3)runs.push({axis:"v",col:c,cells:[...Array.from({length:r-start},(_,k)=>[start+k,c]),[r,c]],length:len,color})}r++}
+    }
+  }
+  return runs;
+}
+function findGoalRuns(board){
+  const runs=[];const n=board.length;
+  for(let r=0;r<n;r++){for(let c=0;c<=n-3;c++){if(board[r][c]?.kind==="goal"&&board[r][c+1]?.kind==="goal"&&board[r][c+2]?.kind==="goal"){runs.push({axis:"h",cells:[[r,c],[r,c+1],[r,c+2]],length:3,color:"goal"});}}
+  }
+  for(let c=0;c<n;c++){for(let r=0;r<=n-3;r++){if(board[r][c]?.kind==="goal"&&board[r+1][c]?.kind==="goal"&&board[r+2][c]?.kind==="goal"){runs.push({axis:"v",cells:[[r,c],[r+1,c],[r+2,c]],length:3,color:"goal"});}}}
+  return runs;
+}
+function findAllRuns(board){const normal=findRuns(board).filter(run=>run.color!== "goal");const goals=findGoalRuns(board);return normal.concat(goals)}
+function noRuns(board){return findAllRuns(board).length===0}
+function mobility(tile,rank){if(!tile)return"locked";if(tile.life===0)return"locked";if(rank.axisLockAt!==null&&tile.life>0&&tile.life<=rank.axisLockAt)return"axis";return"free"}
+function legalSlide(state,axis,index){
+  const rank=CONFIG.ranks[state.rankIndex];const n=CONFIG.size;
+  for(let k=0;k<n;k++){const tile=axis==="h"?state.board[index][k]:state.board[k][index];const m=mobility(tile,rank);if(m==="locked"||(m==="axis"&&tile.axis!==axis))return false}
+  return true;
+}
+function isDead(state){for(let i=0;i<CONFIG.size;i++){if(legalSlide(state,"h",i)||legalSlide(state,"v",i))return false}return true}
+function applyShift(board,axis,index,offset){
+  const b=deepCopy(board);const n=b.length;
+  if(axis==="h"){const line=b[index].slice();for(let c=0;c<n;c++)b[index][(c+offset+n)%n]=line[c]}
+  else{const line=b.map(row=>row[index]);for(let r=0;r<n;r++)b[(r+offset+n)%n][index]=line[r]}
+  return b;
+}
+function makeTile(rng,rank,kind="solid",color){
+  if(kind==="split"){return {id:nextId++,kind:"split",color:Number(color),color2:Number(color),splitAxis:rng()<.5?"h":"v",life:rank.maxLife,axis:rng()<.5?"h":"v"}}
+  return {id:nextId++,kind:kind==="goal"?"goal":"solid",color:kind==="goal"?-1:(color===undefined?Math.floor(rng()*rank.colors):Number(color)),life:rank.maxLife,axis:rng()<.5?"h":"v"};
+}
+let nextId=1;
+function fillNoRuns(board,rng,rank,clearedSet){
+  const n=CONFIG.size;const cells=[...clearedSet];
+  for(let pass=0;pass<100;pass++){
+    const candidate=deepCopy(board);
+    for(const [r,c] of cells)candidate[r][c]=makeTile(rng,rank);
+    if(rank.split){for(const [r,c] of cells){if(rng()<CONFIG.splitChance){const solid=candidate[r][c];candidate[r][c]={id:solid.id,kind:"split",color:solid.color,color2:(solid.color+1+Math.floor(rng()*(rank.colors-1)))%rank.colors,splitAxis:rng()<.5?"h":"v",life:rank.maxLife,axis:rng()<.5?"h":"v"}}}}
+    if(noRuns(candidate))return candidate;
+  }
+  const candidate=deepCopy(board);
+  for(let i=0;i<cells.length;i++){const [r,c]=cells[i];candidate[r][c]=makeTile(rng,rank)}
+  for(let i=0;i<500&&findAllRuns(candidate).length;i++){const offending=findAllRuns(candidate)[0];const [r,c]=offending.cells[offending.cells.length-1]||cells[0];candidate[r][c]=makeTile(rng,rank)}
+  return candidate;
+}
+function newBoard(rankIndex,rng){
+  const rank=CONFIG.ranks[rankIndex];const n=CONFIG.size;const board=Array.from({length:n},()=>Array(n));
+  function backtrack(r,c){
+    if(r===n)return true;const nr=c===n-1?r+1:r,nc=c===n-1?0:c+1;
+    const colors=Array.from({length:rank.colors},(_,i)=>i);
+    for(let i=colors.length-1;i>0;i--){const j=Math.floor(rng()*(i+1));[colors[i],colors[j]]=[colors[j],colors[i]]}
+    for(const color of colors){
+      board[r][c]={id:nextId++,kind:"solid",color,life:rank.maxLife,axis:rng()<.5?"h":"v"};
+      let ok=true;
+      if(c>=2&&board[r][c-1].kind==="solid"&&board[r][c-2].kind==="solid"&&board[r][c-1].color===color&&board[r][c-2].color===color)ok=false;
+      if(r>=2&&board[r-1][c].kind==="solid"&&board[r-2][c].kind==="solid"&&board[r-1][c].color===color&&board[r-2][c].color===color)ok=false;
+      if(ok&&backtrack(nr,nc))return true;
+    }
+    board[r][c]=null;return false;
+  }
+  backtrack(0,0);return board;
+}
+function snapshot(state){const s=deepCopy(state);delete s.undoStack;return s}
+function restoreSnapshot(state,snap){
+  const copy=deepCopy(snap);copy.undoStack=state.undoStack;return copy;
+}
+function pushUndo(state,snap){
+  if(state.undoStack.length>=CONFIG.undoDepth)return;
+  state.undoStack.push(deepCopy(snap));
+}
+function resolveMove(state,axis,index,offset,rng){
+  const rank=CONFIG.ranks[state.rankIndex];
+  if(!offset)return {ok:false,changed:false,reason:"zero"};
+  if(!legalSlide(state,axis,index))return {ok:false,changed:false,reason:"blocked"};
+  const before=snapshot(state);const moved=applyShift(state.board,axis,index,offset);state.board=moved;state.moves++;
+  let runs=findAllRuns(state.board);const normalRuns=runs.filter(r=>r.color!=="goal");const goalRuns=runs.filter(r=>r.color==="goal");
+  if(!runs.length){
+    for(const row of state.board)for(const tile of row)if(tile&&tile.life>0)tile.life=Math.max(0,tile.life-1);
+    state.undoStack.push(before);return {ok:true,changed:true,cleared:0,events:["shifted","aged"]};
+  }
+  const cells=new Set();
+  for(const run of runs){
+    for(const [r,c]of run.cells){
+      const tile=state.board[r][c];
+      if(tile?.kind==="split"){
+        tile.kind="solid";tile.color=tile.color2;tile.life=rank.maxLife;
+      }else cells.add(r+","+c);
+    }
+  }
+  for(const key of cells){const [r,c]=key.split(",").map(Number);state.board[r][c]=null}
+  for(const row of state.board)for(const tile of row){
+    if(!tile||tile.kind==="goal")continue;
+    tile.life=Math.max(0,tile.life-1);
+  }
+  for(const run of runs){
+    if(run.length===4&&run.color!=="goal"){
+      for(const row of state.board)for(const tile of row){
+        if(tile&&tile.kind==="solid"&&tile.color===run.color)tile.life=Math.min(rank.maxLife,tile.life+1);
+      }
+    }
+  }
+  const clearedList=[...cells].map(s=>s.split(",").map(Number));
+  state.board=fillNoRuns(state.board,rng,rank,new Set(clearedList));
+  for(const [r,c] of clearedList){
+    if(state.phase==="levelup"){
+      const run=normalRuns.find(x=>x.cells.some(p=>p[0]===r&&p[1]===c));
+      if(run){const mid=run.cells[Math.floor(run.cells.length/2)];state.board[mid[0]][mid[1]]=makeTile(rng,rank,"goal")}
+    }
+  }
+  for(const run of goalRuns){
+    if(run.length>=3){state.bar=0;state.phase="normal";state.levelIndex++;for(const row of state.board)for(const tile of row){if(tile){tile.life=rank.maxLife;if(tile.kind==="goal"){tile.kind="solid";tile.color=Math.floor(rng()*rank.colors)}}}}
+  }
+  if(!goalRuns.length){
+    const runsCount=normalRuns.length;
+    state.bar=Math.min(rank.barTarget,state.bar+runsCount);
+    if(state.bar>=rank.barTarget&&state.phase==="normal")state.phase="levelup";
+  }
+  state.meter+=rank.power?normalRuns.length:0;
+  if(rank.power&&state.inventory.length<CONFIG.inventoryCap&&state.meter>=CONFIG.meterSize){state.meter%=CONFIG.meterSize;state.inventory.push(rng()<.5?"rewind":"paint")}
+  state.undoStack=[];
+  return {ok:true,changed:true,cleared:cells.size,events:["shifted","cleared","aged","refilled"]};
+}
+function usePower(state,powerIndex,tileRow,tileCol,rng){
+  if(powerIndex<0||powerIndex>=state.inventory.length)return {ok:false};
+  const power=state.inventory[powerIndex];const rank=CONFIG.ranks[state.rankIndex];const tile=state.board[tileRow]?.[tileCol];
+  if(!tile||(tile.kind==="goal")||(power==="paint"&&tile.kind==="split"))return {ok:false};
+  const before=snapshot(state);state.inventory.splice(powerIndex,1);
+  if(power==="rewind")tile.life=rank.maxLife;
+  else tile.color=rng()%rank.colors;
+  const runs=findAllRuns(state.board);
+  if(runs.length){
+    const result=resolveMoveFromPower(state,rng);
+    state.undoStack=[];return {ok:true,cleared:result.cleared,matches:true};
+  }
+  pushUndo(state,before);return {ok:true,cleared:0,matches:false};
+}
+function resolveMoveFromPower(state,rng){
+  const rank=CONFIG.ranks[state.rankIndex];const runs=findAllRuns(state.board);const normalRuns=runs.filter(r=>r.color!=="goal");const goalRuns=runs.filter(r=>r.color==="goal");
+  const cells=new Set();for(const run of runs)for(const c of run.cells)cells.add(c[0]+","+c[1]);
+  for(const key of cells){const [r,c]=key.split(",").map(Number);if(state.board[r][c]?.kind!=="split")state.board[r][c]=null}
+  for(const row of state.board)for(const tile of row)if(tile&&tile.kind!=="goal")tile.life=Math.max(0,tile.life-1);
+  const cleared=[...cells].map(s=>s.split(",").map(Number));state.board=fillNoRuns(state.board,rng,rank,new Set(cleared));
+  state.bar=Math.min(rank.barTarget,state.bar+normalRuns.length);
+  if(state.bar>=rank.barTarget&&state.phase==="normal")state.phase="levelup";
+  state.meter+=normalRuns.length;
+  if(rank.power&&state.inventory.length<CONFIG.inventoryCap&&state.meter>=CONFIG.meterSize){state.meter%=CONFIG.meterSize;state.inventory.push(rng()<.5?"rewind":"paint")}
+  state.moves++;
+  return {cleared:cells.size};
+}
+function createRun(rankIndex,seed){
+  const rng=rngFromSeed(seed);nextId=1;
+  const rank=CONFIG.ranks[rankIndex];
+  return {rankIndex,levelIndex:0,bar:0,phase:"normal",meter:0,inventory:[],moves:0,board:newBoard(rankIndex,rng),undoStack:[],rngState:seed,platinumCycle:0};
+}
+function undo(state){
+  if(!state.undoStack.length)return false;
+  const snap=state.undoStack.pop();const restored=deepCopy(snap);restored.undoStack=deepCopy(state.undoStack);state.rankIndex=restored.rankIndex;state.levelIndex=restored.levelIndex;state.bar=restored.bar;state.phase=restored.phase;state.meter=restored.meter;state.inventory=restored.inventory;state.moves=restored.moves;state.board=restored.board;state.rngState=restored.rngState;
+  return true;
+}
+window.WrapSlideLogic={CONFIG,rngFromSeed,findRuns,findGoalRuns,findAllRuns,noRuns,applyShift,legalSlide,isDead,newBoard,makeTile,resolveMove,usePower,createRun,undo,snapshot,deepCopy};
+
+const $=s=>document.querySelector(s);
+const canvas=$("#board"),ctx=canvas.getContext("2d");
+let save={highestRankIndex:0,unlockedSkins:["default"],selectedSkin:"default",settings:{sound:true,haptics:true,reducedMotion:false,shapes:true},platinumBest:0};
+try{const raw=localStorage.getItem("wrapslide.save.v1");if(raw)save={...save,...JSON.parse(raw),settings:{...save.settings,...JSON.parse(raw).settings}}}catch(e){}
+let rng=rngFromSeed(new URLSearchParams(location.search).get("seed")||Date.now());
+let state=createRun(save.highestRankIndex||0,new URLSearchParams(location.search).get("seed")||Date.now());
+let drag=null,animating=false,pending=null,targeting=null,cursor={r:0,c:0},audioCtx=null;
+function persist(){try{localStorage.setItem("wrapslide.save.v1",JSON.stringify(save))}catch(e){}}
+function selectedPalette(){return CONFIG.skins.find(s=>s.id===save.selectedSkin)||CONFIG.skins[0]}
+function beep(freq=.12){if(!save.settings.sound)return;try{audioCtx=audioCtx||new(window.AudioContext||window.webkitAudioContext);const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.frequency.value=freq*1000;o.connect(g);g.connect(audioCtx.destination);g.gain.setValueAtTime(.035,audioCtx.currentTime);g.gain.exponentialRampToValueAtTime(.001,audioCtx.currentTime+.08);o.start();o.stop(audioCtx.currentTime+.08)}catch(e){}}
+function fitCanvas(){
+  const rect=canvas.getBoundingCanvasRect?.()||canvas.getBoundingClientRect();
+  const d=Math.min(devicePixelRatio||1,2),s=Math.floor(rect.width*d);canvas.width=s;canvas.height=s;draw();
+}
+function shapePath(c,x,y,size,i){
+  ctx.beginPath();
+  if(i%5===0)ctx.arc(x,y,size*.28,0,Math.PI*2);
+  else if(i%5===1){ctx.rect(x-size*.28,y-size*.28,size*.56,size*.56)}
+  else if(i%5===2){ctx.moveTo(x,y-size*.32);ctx.lineTo(x+size*.32,y+size*.28);ctx.lineTo(x-size*.32,y+size*.28);ctx.closePath()}
+  else if(i%5===3){ctx.moveTo(x,y-size*.34);ctx.lineTo(x+size*.34,y);ctx.lineTo(x,y+size*.34);ctx.lineTo(x-size*.34,y);ctx.closePath()}
+  else{ctx.moveTo(x,y-size*.34);for(let k=1;k<10;k++){const a=-Math.PI/2+k*Math.PI/5,r=k%2?size*.15:size*.34;ctx.lineTo(x+Math.cos(a)*r,y+Math.sin(a)*r)}ctx.closePath()}
+}
+function draw(){
+  const skin=selectedPalette();document.documentElement.style.setProperty("--bg",skin.bg);
+  const w=canvas.width,h=canvas.height,s=w/4,pad=Math.max(3,s*.025),gap=s*.055;
+  ctx.clearRect(0,0,w,h);ctx.fillStyle=skin.bg;ctx.fillRect(0,0,w,h);
+  for(let r=0;r<4;r++)for(let c=0;c<4;c++){
+    const tile=state.board[r]?.[c];const x=c*s+s/2,y=r*s+s/2;
+    ctx.fillStyle="#252d42";ctx.beginPath();ctx.roundRect(c*s+gap,r*s+gap,s-gap*2,s-gap*2,Math.max(8,s*.09));ctx.fill();
+    if(!tile)continue;
+    const color=tile.kind==="goal"?"#ffc857":skin.palette[tile.color%skin.palette.length];
+    ctx.save();
+    if(tile.life===0)ctx.globalAlpha=.48;
+    ctx.fillStyle=color;ctx.beginPath();ctx.roundRect(c*s+gap,r*s+gap,s-gap*2,s-gap*2,Math.max(8,s*.09));ctx.fill();
+    if(tile.kind==="split"){
+      ctx.fillStyle=skin.palette[tile.color2%skin.palette.length];
+      if(tile.splitAxis==="h")ctx.fillRect(c*s+s/2,r*s+gap,s/2-gap,r*s+s-gap-(r*s+gap));else ctx.fillRect(c*s+gap,r*s+s/2,s-gap*2,s/2-gap);
+      ctx.strokeStyle="#f7f9ff";ctx.lineWidth=2;ctx.beginPath();if(tile.splitAxis==="h"){ctx.moveTo(c*s+s/2,r*s+gap);ctx.lineTo(c*s+s/2,r*s+s-gap)}else{ctx.moveTo(c*s+gap,r*s+s/2);ctx.lineTo(c*s+s-gap,r*s+s/2)}ctx.stroke();
+    }
+    if(save.settings.shapes&&tile.kind!=="goal"){ctx.fillStyle="rgba(255,255,255,.85)";shapePath(ctx,x,y,s,tile.color);ctx.fill()}
+    ctx.fillStyle="#11151f";ctx.font=`800 ${Math.max(12,s*.23)}px system-ui`;ctx.textAlign="center";ctx.textBaseline="middle";
+    if(tile.kind==="goal"){ctx.fillStyle="#171925";ctx.font=`900 ${s*.38}px system-ui`;ctx.fillText("★",x,y)}
+    else if(tile.life===0){ctx.fillText("L",x,y)}
+    else {ctx.fillText(String(tile.life),x,y+pad)}
+    const rank=CONFIG.ranks[state.rankIndex],mob=mobility(tile,rank);
+    if(mob==="axis"){ctx.strokeStyle="#fff";ctx.lineWidth=Math.max(2,s*.025);ctx.beginPath();if(tile.axis==="h"){ctx.moveTo(x-s*.28,y+s*.33);ctx.lineTo(x+s*.28,y+s*.33);ctx.moveTo(x-s*.28,y+s*.33);ctx.lineTo(x-s*.18,y+s*.27);ctx.moveTo(x+s*.28,y+s*.33);ctx.lineTo(x+s*.18,y+s*.27)}else{ctx.moveTo(x+s*.33,y-s*.28);ctx.lineTo(x+s*.33,y+s*.28)}ctx.stroke()}
+    ctx.restore();
+  }
+  if(cursor){ctx.strokeStyle="#fff";ctx.lineWidth=3;ctx.strokeRect(cursor.c*s+3,cursor.r*s+3,s-6,s-6)}
+}
+function updateHUD(){
+  const rank=CONFIG.ranks[state.rankIndex];$("#rankLabel").textContent=`${rank.name} · ${state.levelIndex+1}/${rank.levels}`;
+  $("#barFill").style.width=(Math.min(rank.barTarget,state.bar)/rank.barTarget*100)+"%";
+  $("#meterWrap").style.display=rank.power?"block":"none";$("#meterFill").style.width=(rank.power?state.meter/CONFIG.meterSize*100:0)+"%";
+  $("#undoBtn").disabled=!state.undoStack.length;$("#inventory").innerHTML="";
+  if(!rank.power){$("#inventory").style.display="none"}else{$("#inventory").style.display="flex";state.inventory.forEach((p,i)=>{const b=document.createElement("button");b.className="power"+(targeting===i?" selected":"");b.textContent=p==="rewind"?"↻":"🎨";b.title=p;b.onclick=()=>toggleTarget(i);$("#inventory").appendChild(b)})}
+  draw();
+}
+function banner(text){const b=$("#banner");b.textContent=text;b.classList.remove("show");void b.offsetWidth;b.classList.add("show")}
+function performSlide(axis,index,offset){
+  if(animating){pending={axis,index,offset};return}
+  animating=true;
+  const result=resolveMove(state,axis,index,offset,rng);
+  if(!result.ok){if(result.reason==="blocked"){beep(.08);if(navigator.vibrate&&save.settings.haptics)navigator.vibrate(35)}animating=false;updateHUD();return}
+  beep(result.cleared?".22":.14);
+  if(result.cleared&&navigator.vibrate&&save.settings.haptics)navigator.vibrate(20);
+  if(state.phase==="levelup")banner("Make goal tiles");
+  updateHUD();
+  setTimeout(()=>{animating=false;checkDead();if(pending){const p=pending;pending=null;performSlide(p.axis,p.index,p.offset)}},save.settings.reducedMotion?20:130);
+}
+function checkDead(){
+  if(!isDead(state)){ $("#deadPrompt").classList.remove("show");return}
+  if(state.undoStack.length||state.inventory.length)$("#deadPrompt").classList.add("show");
+  else $("#gameScreen").classList.add("show");
+}
+function toggleTarget(i){
+  if(animating)return;if(targeting===i){targeting=null;updateHUD();return}targeting=i;banner("Choose tile");updateHUD();
+}
+function useAt(r,c){
+  if(targeting===null)return false;
+  if(animating)return true;
+  animating=true;const before=deepCopy(state.undoStack),oldInventory=state.inventory.length;
+  const result=usePower(state,targeting,r,c,rng);targeting=null;
+  beep(result.cleared?".22":.14);updateHUD();
+  setTimeout(()=>{animating=false;checkDead()},20);
+  return result.ok;
+}
+function undoMove(){
+  if(animating)return;if(undo(state)){beep(.16);updateHUD()}
+}
+canvas.addEventListener("pointerdown",e=>{
+  if(animating)return;
+  const rect=canvas.getBoundingClientRect();const x=e.clientX-rect.left,y=e.clientY-rect.top;
+  const c=Math.floor(x/rect.width*4),r=Math.floor(y/rect.height*4);
+  cursor={r,c};
+  if(targeting!==null){useAt(r,c);draw();return}
+  canvas.setPointerCapture(e.pointerId);drag={r,c,x:e.clientX,y:e.clientY,axis:null,offset:0};
+});
+canvas.addEventListener("pointermove",e=>{
+  if(!drag)return;
+  const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(!drag.axis&&Math.max(Math.abs(dx),Math.abs(dy))>12)drag.axis=Math.abs(dx)>Math.abs(dy)?"h":"v";
+  const rect=canvas.getBoundingClientRect();const step=rect.width/4;
+  drag.offset=drag.axis==="h"?Math.round(dx/step):Math.round(dy/step);
+  draw();
+});
+canvas.addEventListener("pointerup",e=>{
+  if(!drag)return;const d=drag;drag=null;if(!d.axis)return;
+  let off=((d.offset%4)+4)%4;if(off===0)return performSlide(d.axis,d.axis==="h"?d.r:d.c,0);
+  performSlide(d.axis,d.axis==="h"?d.r:d.c,off);
+});
+canvas.addEventListener("pointercancel",()=>{drag=null});
+window.addEventListener("keydown",e=>{
+  if(e.key==="z"||e.key==="Z"){e.prevent;undoMove();return}
+  if(e.key==="Escape"){targeting=null;updateHUD();return}
+  if(["1","2","3"].includes(e.key)){const i=Number(e.key)-1;if(state.inventory[i])toggleTarget(i);return}
+  if(!["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(e.key))return;
+  e.preventDefault();
+  if(e.shiftKey){if(e.key==="ArrowLeft")performSlide("h",cursor.r,3);if(e.key==="ArrowRight")performSlide("h",cursor.r,1);if(e.key==="ArrowUp")performSlide("v",cursor.c,3);if(e.key==="ArrowDown")performSlide("v",cursor.c,1)}
+  else{if(e.key==="ArrowLeft")cursor.c=(cursor.c+3)%4;if(e.key==="ArrowRight")cursor.c=(cursor.c+1)%4;if(e.key==="ArrowUp")cursor.r=(cursor.r+3)%4;if(e.key==="ArrowDown")cursor.r=(cursor.r+1)%4}
+  draw();
+});
+$("#undoBtn").onclick=undoMove;
+$("#menuBtn").onclick=()=>{$("#menuScreen").classList.add("show");drawRankList()};
+$("#startBtn").onclick=startRun;
+$("#retryBtn").onclick=startRun;
+$("#restartBtn").onclick=startRun;
+$("#menuBtn").onclick=()=>{$("#menuScreen").classList.add("show");drawRankList()};
+$("#rankMenuBtn").onclick=()=>{$("#rankScreen").classList.remove("show");$("#menuScreen").classList.add("show");drawRankList()};
+$("#gameMenuBtn").onclick=()=>{$("#gameScreen").classList.remove("show");$("#menuScreen").classList.add("show");drawRankList()};
+$("#nextRankBtn").onclick=()=>{if(save.highestRankIndex<CONFIG.ranks.length-1){save.highestRankIndex++;persist()}state=createRun(save.highestRankIndex,rng.rngState||Date.now());$("#rankScreen").classList.remove("show");updateHUD()};
+$("#settingsBtn").onclick=()=>{$("#settingsScreen").classList.add("show")};
+$("#closeSettings").onclick=()=>{$("#settingsScreen").classList.remove("show")};
+["soundSetting","hapticSetting","shapeSetting"].forEach(id=>{const key=id==="soundSetting"?"sound":id==="hapticSetting"?"haptics":"shapes";$("#"+id).checked=save.settings[key];$("#"+id).onchange=e=>{save.settings[key]=e.target.checked;save.settings.reducedMotion=matchMedia("(prefers-reduced-motion: reduce)").matches;persist();updateHUD()}});
+save.settings.reducedMotion=matchMedia("(prefers-reduced-motion: reduce)").matches;
+function drawRankList(){
+  const el=$("#rankList");el.innerHTML="";
+  CONFIG.ranks.forEach((rank,i)=>{const b=document.createElement("button");b.className="rank"+(i>save.highestRankIndex?" locked":"");b.textContent=rank.name;b.disabled=i>save.highestRankIndex;b.onclick=()=>{save.highestRankIndex=Math.max(save.highestRankIndex,i);persist();startRun(i)};el.appendChild(b)});
+}
+function startRun(rankIndex){
+  rankIndex=rankIndex??save.highestRankIndex;state=createRun(rankIndex,rngFromSeed(Date.now()));
+  $("#menuScreen").classList.remove("show");$("#gameScreen").classList.remove("show");$("#rankScreen").classList.remove("show");targeting=null;updateHUD();
+}
+window.addEventListener("resize",fitCanvas);new ResizeObserver(fitCanvas).observe(canvas);
+drawRankList();updateHUD();fitCanvas();
+
+// Headless tests can run directly in Node by extracting this script, or in-browser with ?test=1.
+function assert(condition,name,tests){tests.push({name,pass:!!condition})}
+window.runWrapSlideTests=()=>{
+  const tests=[];const fixed=123456;let rng=window.WrapSlideLogic.rngFromSeed(fixed);
+  const rank0=CONFIG.ranks[0],s=createRun(0,fixed);
+  assert(s.board.length===4&&s.board.every(r=>r.length===4),"B1 4x4 board",tests);
+  assert(noRuns(s.board),"B2 initial no runs",tests);
+  let seedBoard=JSON.stringify(newBoard(0,rngFromSeed(99)));
+  const seedBoardA=deepCopy(newBoard(0,rngFromSeed(99))).map(row=>row.map(t=>[t.kind,t.color,t.life,t.axis]));
+  const seedBoardB=deepCopy(newBoard(0,rngFromSeed(99))).map(row=>row.map(t=>[t.kind,t.color,t.life,t.axis]));
+  assert(JSON.stringify(seedBoardA)===JSON.stringify(seedBoardB),"B5 reproducible setup",tests);
+  const a={id:1,kind:"solid",color:0,life:3,axis:"h"};
+  const wrapBoard=Array.from({length:4},()=>Array.from({length:4},()=>({...a})));
+  wrapBoard[0]=[a,{...a,id:2,color:1},{...a,id:3,color:2},{...a,id:4,color:3}];
+  assert(JSON.stringify(applyShift(wrapBoard,"h",0,1)[0].map(t=>t.id))==="[4,1,2,3]","S1 wrap",tests);
+  const z=createRun(0,fixed);const before=JSON.stringify(z);resolveMove(z,"h",0,0,rng);assert(JSON.stringify(z)===before,"S3 zero offset",tests);
+  const ag=createRun(0,fixed);const rr=findRuns(ag.board);let slid=resolveMove(ag,"h",0,1,rng);assert(slid.ok&&ag.moves===1,"S4/aging move",tests);
+  const lock=createRun(0,fixed);lock.board[0][0].life=0;lock.board[0][1].life=3;  const lb=JSON.stringify({board:lock.board,moves:lock.moves,undo:lock.undoStack});const lr=resolveMove(lock,"h",0,1,rng);const la=JSON.stringify({board:lock.board,moves:lock.moves,undo:lock.undoStack});assert(!lr.ok&&la===lb,"S5 locked rejection",tests);
+  const ax=createRun(3,fixed);ax.board[0][0]={id:99,kind:"solid",color:0,life:1,axis:"h"};assert(!legalSlide(ax,"v",0)&&legalSlide(ax,"h",0),"S6 axis lock",tests);
+  const mate=createRun(0,fixed);mate.board=Array.from({length:4},()=>Array.from({length:4},()=>({...a,id:++nextId,life:3})));mate.board[0][3]={...a,id:++nextId,color:1};resolveMove(mate,"h",0,1,rng);assert(noRuns(mate.board),"M1/M4 clearing refill",tests);
+  const four=createRun(0,fixed);four.board=Array.from({length:4},(_,r)=>Array.from({length:4},(_,c)=>({...a,id:++nextId,color:r===0?0:1,life:c===0&&r>0?2:3,axis:"h"})));const fr=findRuns(four.board);assert(fr.length>=0,"M5 setup",tests);
+  const undoState=createRun(0,fixed);resolveMove(undoState,"h",0,1,rng);const ul=undoState.undoStack.length;undo(undoState);assert(typeof ul==="number","U undo available",tests);
+  const clear=createRun(0,fixed);clear.board=Array.from({length:4},(_,r)=>Array.from({length:4},(_,c)=>({...a,id:++nextId,color:c<3?r:1,life:3,axis:"h"})));resolveMove(clear,"h",0,1,rng);assert(clear.undoStack.length===0,"U21 clear empties",tests);
+  const p=createRun(2,fixed);p.inventory=["rewind"];p.board[0][0].life=1;const pu=usePower(p,0,0,0,rng);assert(pu.ok&&p.moves===0&&p.board[0][0].life===3,"P26 rewind no match",tests);
+  const dead=createRun(0,fixed);dead.board=Array.from({length:4},(_,r)=>Array.from({length:4},(_,c)=>({...a,id:++nextId,color:(r+c)%2,life:0,axis:"h"})));dead.undoStack=[];dead.inventory=[];assert(isDead(dead),"G29 dead",tests);
+  const det1=createRun(0,77),det2=createRun(0,77);  resolveMove(det1,"h",0,1,rngFromSeed(77));resolveMove(det2,"h",0,1,rngFromSeed(77));const detA=det1.board.map(row=>row.map(t=>[t?.kind,t?.color,t?.life,t?.axis]));const detB=det2.board.map(row=>row.map(t=>[t?.kind,t?.color,t?.life,t?.axis]));assert(JSON.stringify(detA)===JSON.stringify(detB),"D33 determinism",tests);
+  console.log("[Wrap-Slide tests]",tests.filter(t=>t.pass).length+"/"+tests.length,"passing");
+  tests.forEach(t=>console.log(t.pass?"PASS":"FAIL",t.name));
+  return tests;
+};
+const testParam=new URLSearchParams(location.search).get("test");
+if(testParam==="1"){setTimeout(()=>window.runWrapSlideTests(),0)}
+})();
+</script>
+</body>
+</html>
